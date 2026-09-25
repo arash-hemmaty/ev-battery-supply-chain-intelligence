@@ -30,13 +30,19 @@ USGS / IEA / UN Comtrade → Python (ETL) → PostgreSQL → Power BI
 - **Documentation:** Markdown
 
 ## Repository Structure
-├── data/ # Raw and processed data (raw is gitignored)
-├── src/ # Python source (ingestion, cleaning, transformation, loading)
-├── sql/ # DDL, reference data, analytical queries
-├── notebooks/ # Exploratory analysis
-├── powerbi/ # Dashboard files
-├── docs/ # Project documentation
-└── reports/ # Final analytical reports
+ data/  Raw and processed data (raw is gitignored)
+
+src/  Python source (ingestion, cleaning, transformation, loading)
+
+sql/  DDL, reference data, analytical queries
+
+notebooks/  Exploratory analysis
+
+powerbi/  Dashboard files
+
+docs/  Project documentation
+
+reports/  Final analytical reports
 
 ## Documentation
 
