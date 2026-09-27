@@ -8,15 +8,16 @@ venv/
 env/
 .venv/
 
-# Data — don't commit large raw files
-data/raw/*
+# Data — ignore large raw files, keep curated CSVs
+data/raw/**/*.pdf
+data/raw/**/*.xlsx
+data/raw/**/*.zip
 data/interim/*
 data/processed/*
-!data/raw/.gitkeep
 !data/interim/.gitkeep
 !data/processed/.gitkeep
 
-# Secrets and local config
+# Secrets
 .env
 .env.local
 *.env
