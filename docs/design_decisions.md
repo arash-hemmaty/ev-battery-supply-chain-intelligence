@@ -72,3 +72,18 @@ can understand *why*.
 | 31 | dim_date.is_latest must be updated every January | Maintenance rule |
 | 32 | Shared conda env (data-project) | Avoid duplicate packages |
 | 33 | requirements.txt lists project-specific packages only | Layered env |
+## Trade Data (Phase 1 additions)
+
+| # | Decision | Rationale |
+|---|---|---|
+| 34 | HS 6-digit level (250410, 250490), not 4-digit | Comtrade reports at 6-digit; alignment avoids artificial aggregation |
+| 35 | hs_revision stored as column, not as documentation only | Trade data without classification version is not reproducible |
+| 36 | product_material_id ≠ hs_code | HS is observed classification; product is analytical standardization |
+| 37 | `GRAPHITE_TRADE_NATURAL` as trade-specific analytical product | Trade data does not distinguish processing stages |
+| 38 | Both reporter-perspectives stored (M and X) | Mirror statistics preserved; never silently merged |
+| 39 | Reporter + partner + flow stored in fact (not just derived) | Observation must be traceable to source-reported perspective |
+| 40 | exporter/importer derived and stored with CHECK consistency | Query convenience without losing integrity |
+| 41 | UNIQUE includes reporter, partner, flow, hs_revision | Mirror flows must not collide |
+| 42 | trade_quantity CHECK > 0, not >= 0 | NULL ≠ 0; zero quantity is meaningless in trade |
+| 43 | valuation_basis (CIF/FOB) stored | Import/export value asymmetry must be traceable |
+| 44 | Supplier dependency analysis uses import-reported flows | Methodological choice, documented; export perspective retained for comparison |

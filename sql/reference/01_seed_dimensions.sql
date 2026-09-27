@@ -160,7 +160,10 @@ INSERT INTO ev.dim_product_material
 ('NICKEL',        'Nickel',                        'raw_material', 'nickel',    7, 1, NULL, 'For NMC (Phase 2).'),
 ('COBALT',        'Cobalt',                        'raw_material', 'cobalt',    7, 1, NULL, 'For NMC (Phase 2).'),
 ('NMC_CAM',       'NMC Cathode Active Material',   'component',    'nmc',       9, 1, 2,    'NMC CAM (Phase 2).');
-
+-- Trade-specific analytical product (Phase 1 trade integration)
+INSERT INTO ev.dim_product_material
+(code, name, entity_type, material_group, stage_id, default_unit_id, chemistry_id, notes) VALUES
+('GRAPHITE_TRADE_NATURAL', 'Natural Graphite — Trade Aggregate', 'trade_aggregate', 'graphite', NULL, 1, NULL, 'Represents international merchandise trade under HS 2504.10 and 2504.90. Not stage-specific. Do not compare directly with production-stage products.');
 -- ----- dim_company -----
 INSERT INTO ev.dim_company (company_code, company_name, country_id, company_type, notes) VALUES
 ('CATL',       'Contemporary Amperex Technology Co. Limited', (SELECT country_id FROM ev.dim_country WHERE country_code='CHN'), 'cell_maker', 'Largest EV battery maker. LFP dominant.'),

@@ -121,27 +121,41 @@ CREATE INDEX ix_fp_country ON ev.fact_production(country_id);
 CREATE INDEX ix_fp_product ON ev.fact_production(product_material_id);
 
 CREATE TABLE ev.fact_trade (
-    trade_id            BIGSERIAL PRIMARY KEY,
-    exporter_country_id INT NOT NULL REFERENCES ev.dim_country(country_id),
-    importer_country_id INT NOT NULL REFERENCES ev.dim_country(country_id),
-    product_material_id INT NOT NULL REFERENCES ev.dim_product_material(product_material_id),
-    date_id             INT NOT NULL REFERENCES ev.dim_date(date_id),
-    unit_id             INT NOT NULL REFERENCES ev.dim_unit(unit_id),
-    source_id           INT NOT NULL REFERENCES ev.dim_source(source_id),
-    hs_code             VARCHAR(10),
-    trade_quantity      NUMERIC(20,4) CHECK (trade_quantity >= 0),
-    trade_value_usd     NUMERIC(20,4) CHECK (trade_value_usd >= 0),
-    notes               TEXT,
-    CONSTRAINT uq_fact_trade
-        UNIQUE (exporter_country_id, importer_country_id, product_material_id,
-                date_id, hs_code, source_id),
+    trade_id              BIGSERIAL PRIMARY KEY,
+    reporter_country_id   INT NOT NULL REFERENCES ev.dim_country(country_id),
+    partner_country_id    INT NOT NULL REFERENCES ev.dim_country(country_id),
+    flow_code             CHAR(1) NOT NULL CHECK (flow_code IN ('M','X')),
+    exporter_country_id   INT NOT NULL REFERENCES ev.dim_country(country_id),
+    importer_country_id   INT NOT NULL REFERENCES ev.dim_country(country_id),
+    hs_code               VARCHAR(10) NOT NULL,
+    hs_revision           VARCHAR(10) NOT NULL,
+    product_material_id   INT NOT NULL REFERENCES ev.dim_product_material(product_material_id),
+    date_id               INT NOT NULL REFERENCES ev.dim_date(date_id),
+    unit_id               INT NOT NULL REFERENCES ev.dim_unit(unit_id),
+    source_id             INT NOT NULL REFERENCES ev.dim_source(source_id),
+    trade_quantity        NUMERIC(20,4) CHECK (trade_quantity > 0),
+    trade_value_usd       NUMERIC(20,4) CHECK (trade_value_usd > 0),
+    valuation_basis       VARCHAR(10) CHECK (valuation_basis IN ('CIF','FOB')),
+    notes                 TEXT,
+    CONSTRAINT chk_fact_trade_direction_consistent CHECK (
+        (flow_code = 'X' AND reporter_country_id = exporter_country_id AND partner_country_id = importer_country_id)
+        OR
+        (flow_code = 'M' AND reporter_country_id = importer_country_id AND partner_country_id = exporter_country_id)
+    ),
     CONSTRAINT chk_fact_trade_diff_countries
-        CHECK (exporter_country_id <> importer_country_id)
+        CHECK (reporter_country_id <> partner_country_id),
+    CONSTRAINT uq_fact_trade UNIQUE (
+        reporter_country_id, partner_country_id, flow_code,
+        product_material_id, date_id, hs_code, hs_revision, source_id
+    )
 );
 
+CREATE INDEX ix_ft_date_rep ON ev.fact_trade(date_id, reporter_country_id);
+CREATE INDEX ix_ft_date_par ON ev.fact_trade(date_id, partner_country_id);
 CREATE INDEX ix_ft_date_exp ON ev.fact_trade(date_id, exporter_country_id);
 CREATE INDEX ix_ft_date_imp ON ev.fact_trade(date_id, importer_country_id);
 CREATE INDEX ix_ft_product  ON ev.fact_trade(product_material_id);
+CREATE INDEX ix_ft_hs       ON ev.fact_trade(hs_code, hs_revision);
 
 CREATE TABLE ev.fact_capacity (
     capacity_id         BIGSERIAL PRIMARY KEY,
