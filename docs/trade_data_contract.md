@@ -126,3 +126,50 @@ as data errors.
 - Transport mode
 - Second-hand / re-export flows
 - Cross-revision time-series harmonization
+
+---
+
+## 10. v1.1 — Additions after Live API Validation
+
+### Data Quality Flags
+
+Every Comtrade observation carries three quality indicators that are
+preserved as part of the observation:
+
+| Comtrade field | Stored as | Meaning |
+|---|---|---|
+| `isReported` | `is_reported` | True if reported by the country; false if estimated by UNSD |
+| `isNetWgtEstimated` | `is_quantity_estimated` | True if net weight is estimated |
+| `legacyEstimationFlag` | `legacy_estimation_flag` | Legacy estimation method code |
+
+These flags are **never** used to silently filter data. They are stored as
+first-class properties of the observation.
+
+### Partner code 0 (World)
+
+`partnerCode = 0` represents the World aggregate, not a bilateral flow.
+These rows are **never** ingested into `fact_trade`. They may be used
+only for sanity checks (e.g., summing bilateral flows and comparing
+with the World total).
+
+### Country Mapping
+
+Comtrade uses UN M49 numeric codes (`reporterCode`, `partnerCode`).
+Mapping to `dim_country` requires `m49_code`, a column added in v1.1.
+
+### Descriptive Fields
+
+Preview-mode API returns `null` for `reporterDesc`, `partnerDesc`, and
+`cmdDesc`. These are **not** relied upon. Country names come from
+`dim_country`; product names come from `dim_product_material`.
+
+### Quantity Unit
+
+`qtyUnitCode = 8` indicates kilograms. Conversion to metric tonnes is
+performed before insertion. `unit_id = T` in `fact_trade`.
+
+### Valuation
+
+- Export flows: `fobvalue` used; `valuation_basis = 'FOB'`
+- Import flows: `cifvalue` used; `valuation_basis = 'CIF'`
+- `primaryValue` used as fallback when the specific value is null
