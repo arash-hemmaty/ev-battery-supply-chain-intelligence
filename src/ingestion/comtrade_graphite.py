@@ -2,18 +2,16 @@
 UN Comtrade — Graphite Trade Ingestion
 Endpoint: /tools/v1/getBilateralData
 
-Fetches bilateral trade data for natural graphite (HS 250410, 250490)
-between a set of reporters and a set of graphite suppliers.
+Fetches bilateral trade data for natural graphite (HS 250410, 250490).
 
-Note: The API endpoint is genuinely bilateral — one call per
-(reporter, partner) pair. We loop over all combinations.
+Two categories of reporters:
+  - Importers: Germany, Japan, South Korea, ..., flow = M
+  - Exporter (China only): fills gap for USA/India/Taiwan which
+    do not report to Comtrade under standard M49 codes.
 
-For each API response, stores TWO observations in fact_trade:
-  1. Reporter perspective  (source_id = UN_COMTRADE_REPORTED)
-  2. Mirror perspective    (source_id = UN_COMTRADE_MIRROR)
-
-Both perspectives are retained, per Trade Data Contract v1.1.
-They are NEVER silently merged.
+Note: Comtrade uses extended M49 codes for some countries:
+  USA = 842, India = 699, Taiwan = 490.
+The column `m49_code_comtrade` in dim_country stores these.
 """
 
 import os
@@ -35,37 +33,37 @@ load_dotenv(PROJECT_ROOT / ".env")
 API_BASE = "https://comtradeapi.un.org/tools/v1"
 API_KEY = os.getenv("COMTRADE_API_KEY")
 
-# Reporters: countries whose graphite imports we analyze.
-# Selection logic:
-#   1. Battery relevance (cell/pack production or significant EV market)
-#   2. Graphite trade relevance (imports in Comtrade)
-#   3. Comtrade coverage availability
-#   4. Data quality assessment
-# Rationale: target 13 reporters. No further expansion without a
-# specific analytical reason.
+# Reporters — countries we ask for trade data.
+# Codes below are Comtrade-specific M49 (may differ from standard).
 REPORTERS = {
-    # Round 1 — core
+    # Importers (flow = M)
     276: "Germany",
     392: "Japan",
     410: "South Korea",
-    840: "United States",
+    842: "United States",
     704: "Vietnam",
-    356: "India",
-    # Round 2 — additional battery-relevant importers
-    158: "Taiwan",
+    699: "India",
+    490: "Taiwan",
     616: "Poland",
     348: "Hungary",
     764: "Thailand",
     724: "Spain",
+    # Exporter (flow = X)
+    156: "China",
 }
 
-# Partners: major natural graphite suppliers
+REPORTER_FLOWS = {
+    156: "X",
+}
+DEFAULT_FLOW = "M"
+
+# Major natural graphite suppliers (Comtrade M49 codes)
 PARTNER_M49_CODES = [
     156,   # China
     76,    # Brazil
     508,   # Mozambique
     450,   # Madagascar
-    356,   # India
+    699,   # India (Comtrade code)
     124,   # Canada
     484,   # Mexico
     144,   # Sri Lanka
@@ -73,8 +71,13 @@ PARTNER_M49_CODES = [
     704,   # Vietnam
 ]
 
+# For China as reporter, only query gap-filling countries
+REPORTER_PARTNERS_OVERRIDE = {
+    156: [842, 699, 490],
+}
+
 HS_CODES = ["250410", "250490"]
-YEARS = list(range(2015, 2027))   # 2015..2026
+YEARS = list(range(2015, 2027))
 
 PRODUCT_CODE = "GRAPHITE_TRADE_NATURAL"
 UNIT_CODE = "T"
@@ -84,18 +87,14 @@ HS_REVISION = "HS2022"
 # ------------------------------------------------------------------
 # API client
 # ------------------------------------------------------------------
-def fetch_bilateral(reporter_m49: int, partner_m49: int) -> dict:
-    """
-    Call getBilateralData for ONE (reporter, partner) pair.
-    Includes all years and both HS codes.
-    """
+def fetch_bilateral(reporter_m49: int, partner_m49: int, flow_code: str) -> dict:
     url = f"{API_BASE}/getBilateralData/C/A/HS"
     params = {
         "reporterCode": str(reporter_m49),
         "partnerCode": str(partner_m49),
         "period": ",".join(str(y) for y in YEARS),
         "cmdCode": ",".join(HS_CODES),
-        "flowCode": "M",
+        "flowCode": flow_code,
         "includeDesc": "true",
         "subscription-key": API_KEY,
     }
@@ -135,8 +134,10 @@ def resolve_references(conn) -> dict:
 
 
 def load_lookups(conn) -> dict:
+    """Map both standard and Comtrade M49 codes to country_id."""
     countries = dict(conn.execute(text(
-        "SELECT m49_code, country_id FROM ev.dim_country WHERE m49_code IS NOT NULL"
+        "SELECT COALESCE(m49_code_comtrade, m49_code), country_id "
+        "FROM ev.dim_country WHERE m49_code IS NOT NULL"
     )).fetchall())
     dates = dict(conn.execute(text(
         "SELECT year, date_id FROM ev.dim_date"
@@ -145,10 +146,9 @@ def load_lookups(conn) -> dict:
 
 
 # ------------------------------------------------------------------
-# Transformation
+# Normalization
 # ------------------------------------------------------------------
 def _norm(v):
-    """Normalize API values: 0, None, or non-numeric → None. Positive → float."""
     if v is None:
         return None
     try:
@@ -167,59 +167,67 @@ def _kg_to_tonnes(kg):
     return round(v / 1000.0, 4)
 
 
-def build_fact_rows(api_row: dict, reporter_m49: int) -> list:
-    """Convert one API row into up to TWO fact_trade rows."""
+# ------------------------------------------------------------------
+# Transformation
+# ------------------------------------------------------------------
+def build_fact_rows(api_row: dict, reporter_m49: int, reporter_is_exporter: bool) -> list:
     partner_m49 = api_row.get("partnerCode")
     period = int(api_row["period"])
     hs_code = api_row["cmdCode"]
 
     rep_qty = _kg_to_tonnes(api_row.get("netWgt"))
     rep_val = _norm(api_row.get("primaryValue"))
-
     mir_qty = _kg_to_tonnes(api_row.get("mirrorNetWgt"))
     mir_val = _norm(api_row.get("mirrorPrimaryValue"))
 
+    if reporter_is_exporter:
+        rep_flow, rep_exporter, rep_importer, rep_basis = "X", reporter_m49, partner_m49, "FOB"
+        mir_flow, mir_reporter, mir_partner = "M", partner_m49, reporter_m49
+        mir_exporter, mir_importer, mir_basis = reporter_m49, partner_m49, "CIF"
+    else:
+        rep_flow, rep_exporter, rep_importer, rep_basis = "M", partner_m49, reporter_m49, "CIF"
+        mir_flow, mir_reporter, mir_partner = "X", partner_m49, reporter_m49
+        mir_exporter, mir_importer, mir_basis = partner_m49, reporter_m49, "FOB"
+
     rows = []
 
-    # --- Reporter perspective ---
     rows.append({
         "reporter_country_id": reporter_m49,
         "partner_country_id":  partner_m49,
-        "flow_code":           "M",
-        "exporter_country_id": partner_m49,
-        "importer_country_id": reporter_m49,
+        "flow_code":           rep_flow,
+        "exporter_country_id": rep_exporter,
+        "importer_country_id": rep_importer,
         "hs_code":             hs_code,
         "hs_revision":         HS_REVISION,
         "date_year":           period,
         "trade_quantity":      rep_qty,
         "trade_value_usd":     rep_val,
-        "valuation_basis":     "CIF",
+        "valuation_basis":     rep_basis,
         "is_reported":         api_row.get("isReported"),
         "is_quantity_estimated": api_row.get("isNetWgtEstimated"),
         "legacy_estimation_flag": api_row.get("legacyEstimationFlag"),
         "source_key":          "source_reported",
-        "notes":               "Reporter perspective (country-reported import).",
+        "notes":               f"Reporter perspective ({'export' if reporter_is_exporter else 'import'}).",
     })
 
-    # --- Mirror perspective ---
     if mir_qty is not None or mir_val is not None:
         rows.append({
-            "reporter_country_id": partner_m49,
-            "partner_country_id":  reporter_m49,
-            "flow_code":           "X",
-            "exporter_country_id": partner_m49,
-            "importer_country_id": reporter_m49,
+            "reporter_country_id": mir_reporter,
+            "partner_country_id":  mir_partner,
+            "flow_code":           mir_flow,
+            "exporter_country_id": mir_exporter,
+            "importer_country_id": mir_importer,
             "hs_code":             hs_code,
             "hs_revision":         HS_REVISION,
             "date_year":           period,
             "trade_quantity":      mir_qty,
             "trade_value_usd":     mir_val,
-            "valuation_basis":     "FOB",
+            "valuation_basis":     mir_basis,
             "is_reported":         None,
             "is_quantity_estimated": None,
             "legacy_estimation_flag": None,
             "source_key":          "source_mirror",
-            "notes":               "Mirror perspective (partner-reported export).",
+            "notes":               f"Mirror perspective ({'import' if reporter_is_exporter else 'export'}).",
         })
 
     return rows
@@ -279,12 +287,16 @@ def ingest():
         print(f"[ref] {len(lk['countries'])} countries, {len(lk['dates'])} years\n")
 
         for reporter_m49 in REPORTERS:
-            for partner_m49 in PARTNER_M49_CODES:
+            flow = REPORTER_FLOWS.get(reporter_m49, DEFAULT_FLOW)
+            is_exporter = (flow == "X")
+            partners = REPORTER_PARTNERS_OVERRIDE.get(reporter_m49, PARTNER_M49_CODES)
+
+            for partner_m49 in partners:
                 if reporter_m49 == partner_m49:
                     continue
 
                 try:
-                    api_data = fetch_bilateral(reporter_m49, partner_m49)
+                    api_data = fetch_bilateral(reporter_m49, partner_m49, flow)
                     api_calls += 1
                 except Exception as e:
                     print(f"[error] {reporter_m49}→{partner_m49}: {e}")
@@ -292,10 +304,11 @@ def ingest():
 
                 rows = api_data.get("data", [])
                 if rows:
-                    print(f"[api] {REPORTERS[reporter_m49]:<12} → partner {partner_m49}: {len(rows)} rows")
+                    arrow = "→" if is_exporter else "←"
+                    print(f"[api] {REPORTERS[reporter_m49]:<12} {arrow} {partner_m49}: {len(rows)} rows")
 
                 for api_row in rows:
-                    fact_rows = build_fact_rows(api_row, reporter_m49)
+                    fact_rows = build_fact_rows(api_row, reporter_m49, is_exporter)
 
                     for r in fact_rows:
                         if r["reporter_country_id"] not in lk["countries"]:
@@ -343,9 +356,9 @@ def ingest():
                         else:
                             updated += 1
 
-                time.sleep(0.5)   # polite delay between partner calls
+                time.sleep(0.5)
 
-            time.sleep(1)   # longer delay between reporters
+            time.sleep(1)
 
     print(f"\n[api calls] {api_calls}")
     print(f"[done] Inserted: {inserted}  Updated: {updated}  Skipped: {skipped}")
