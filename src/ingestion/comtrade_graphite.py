@@ -3,7 +3,10 @@ UN Comtrade — Graphite Trade Ingestion
 Endpoint: /tools/v1/getBilateralData
 
 Fetches bilateral trade data for natural graphite (HS 250410, 250490)
-between a set of reporters and China.
+between a set of reporters and a set of graphite suppliers.
+
+Note: The API endpoint is genuinely bilateral — one call per
+(reporter, partner) pair. We loop over all combinations.
 
 For each API response, stores TWO observations in fact_trade:
   1. Reporter perspective  (source_id = UN_COMTRADE_REPORTED)
@@ -15,7 +18,6 @@ They are NEVER silently merged.
 
 import os
 import time
-from pathlib import Path
 from typing import Optional
 
 import requests
@@ -33,7 +35,7 @@ load_dotenv(PROJECT_ROOT / ".env")
 API_BASE = "https://comtradeapi.un.org/tools/v1"
 API_KEY = os.getenv("COMTRADE_API_KEY")
 
-# Countries (M49 codes) that import graphite from China
+# Reporters: countries whose imports we want to analyze
 REPORTERS = {
     276: "Germany",
     392: "Japan",
@@ -43,39 +45,49 @@ REPORTERS = {
     356: "India",
 }
 
-PARTNER_M49 = 156   # China
+# Partners: major natural graphite suppliers
+PARTNER_M49_CODES = [
+    156,   # China
+    76,    # Brazil
+    508,   # Mozambique
+    450,   # Madagascar
+    356,   # India
+    124,   # Canada
+    484,   # Mexico
+    144,   # Sri Lanka
+    578,   # Norway
+    704,   # Vietnam
+]
+
 HS_CODES = ["250410", "250490"]
 YEARS = list(range(2015, 2027))   # 2015..2026
 
 PRODUCT_CODE = "GRAPHITE_TRADE_NATURAL"
 UNIT_CODE = "T"
-HS_REVISION = "HS2022"  # 2504 codes unchanged across recent revisions
+HS_REVISION = "HS2022"
 
 
 # ------------------------------------------------------------------
 # API client
 # ------------------------------------------------------------------
-def fetch_bilateral(reporter_m49: int) -> dict:
+def fetch_bilateral(reporter_m49: int, partner_m49: int) -> dict:
     """
-    Call getBilateralData for one reporter → China, all years and both HS codes.
+    Call getBilateralData for ONE (reporter, partner) pair.
+    Includes all years and both HS codes.
     """
     url = f"{API_BASE}/getBilateralData/C/A/HS"
     params = {
         "reporterCode": str(reporter_m49),
-        "partnerCode": str(PARTNER_M49),
+        "partnerCode": str(partner_m49),
         "period": ",".join(str(y) for y in YEARS),
         "cmdCode": ",".join(HS_CODES),
-        "flowCode": "M",           # reporter imports FROM China
+        "flowCode": "M",
         "includeDesc": "true",
         "subscription-key": API_KEY,
     }
-    print(f"[api] GET reporter={reporter_m49} ({REPORTERS[reporter_m49]})")
     resp = requests.get(url, params=params, timeout=60)
     resp.raise_for_status()
-    data = resp.json()
-    count = data.get("count", 0)
-    print(f"[api]   → {count} rows returned")
-    return data
+    return resp.json()
 
 
 # ------------------------------------------------------------------
@@ -109,7 +121,6 @@ def resolve_references(conn) -> dict:
 
 
 def load_lookups(conn) -> dict:
-    """Load country M49 → id and year → date_id maps."""
     countries = dict(conn.execute(text(
         "SELECT m49_code, country_id FROM ev.dim_country WHERE m49_code IS NOT NULL"
     )).fetchall())
@@ -123,11 +134,7 @@ def load_lookups(conn) -> dict:
 # Transformation
 # ------------------------------------------------------------------
 def _norm(v):
-    """
-    Normalize API values: 0, None, or non-numeric → None.
-    Positive values → float.
-    Rationale: 0 is meaningless in trade (per Trade Data Contract v1.1).
-    """
+    """Normalize API values: 0, None, or non-numeric → None. Positive → float."""
     if v is None:
         return None
     try:
@@ -140,7 +147,6 @@ def _norm(v):
 
 
 def _kg_to_tonnes(kg):
-    """Convert kg → metric tonnes. Return None if input is None or non-positive."""
     v = _norm(kg)
     if v is None:
         return None
@@ -148,52 +154,44 @@ def _kg_to_tonnes(kg):
 
 
 def build_fact_rows(api_row: dict, reporter_m49: int) -> list:
-    """
-    Convert one bilateral API row into TWO fact_trade rows.
-    Returns list of dicts ready for UPSERT.
-    """
+    """Convert one API row into up to TWO fact_trade rows."""
     partner_m49 = api_row.get("partnerCode")
     period = int(api_row["period"])
     hs_code = api_row["cmdCode"]
 
-    # Reporter side
     rep_qty = _kg_to_tonnes(api_row.get("netWgt"))
     rep_val = _norm(api_row.get("primaryValue"))
-    rep_is_est = api_row.get("isNetWgtEstimated")
-    rep_is_reported = api_row.get("isReported")
-    rep_legacy_flag = api_row.get("legacyEstimationFlag")
 
-    # Mirror side
     mir_qty = _kg_to_tonnes(api_row.get("mirrorNetWgt"))
     mir_val = _norm(api_row.get("mirrorPrimaryValue"))
 
     rows = []
 
-    # --- Row 1: reporter perspective (reporter M) ---
+    # --- Reporter perspective ---
     rows.append({
         "reporter_country_id": reporter_m49,
         "partner_country_id":  partner_m49,
         "flow_code":           "M",
-        "exporter_country_id": partner_m49,   # exporter = China
-        "importer_country_id": reporter_m49,  # importer = Germany
+        "exporter_country_id": partner_m49,
+        "importer_country_id": reporter_m49,
         "hs_code":             hs_code,
         "hs_revision":         HS_REVISION,
         "date_year":           period,
         "trade_quantity":      rep_qty,
         "trade_value_usd":     rep_val,
         "valuation_basis":     "CIF",
-        "is_reported":         rep_is_reported,
-        "is_quantity_estimated": rep_is_est,
-        "legacy_estimation_flag": rep_legacy_flag,
+        "is_reported":         api_row.get("isReported"),
+        "is_quantity_estimated": api_row.get("isNetWgtEstimated"),
+        "legacy_estimation_flag": api_row.get("legacyEstimationFlag"),
         "source_key":          "source_reported",
         "notes":               "Reporter perspective (country-reported import).",
     })
 
-    # --- Row 2: mirror perspective (China reports Export) ---
+    # --- Mirror perspective ---
     if mir_qty is not None or mir_val is not None:
         rows.append({
-            "reporter_country_id": partner_m49,   # reporter = China
-            "partner_country_id":  reporter_m49,  # partner = Germany
+            "reporter_country_id": partner_m49,
+            "partner_country_id":  reporter_m49,
             "flow_code":           "X",
             "exporter_country_id": partner_m49,
             "importer_country_id": reporter_m49,
@@ -203,7 +201,7 @@ def build_fact_rows(api_row: dict, reporter_m49: int) -> list:
             "trade_quantity":      mir_qty,
             "trade_value_usd":     mir_val,
             "valuation_basis":     "FOB",
-            "is_reported":         None,   # unknown for mirror
+            "is_reported":         None,
             "is_quantity_estimated": None,
             "legacy_estimation_flag": None,
             "source_key":          "source_mirror",
@@ -256,6 +254,7 @@ def ingest():
 
     engine = get_engine()
     inserted = updated = skipped = 0
+    api_calls = 0
 
     with engine.begin() as conn:
         refs = resolve_references(conn)
@@ -266,70 +265,76 @@ def ingest():
         print(f"[ref] {len(lk['countries'])} countries, {len(lk['dates'])} years\n")
 
         for reporter_m49 in REPORTERS:
-            try:
-                api_data = fetch_bilateral(reporter_m49)
-            except Exception as e:
-                print(f"[error] reporter {reporter_m49}: {e}")
-                continue
+            for partner_m49 in PARTNER_M49_CODES:
+                if reporter_m49 == partner_m49:
+                    continue
 
-            for api_row in api_data.get("data", []):
-                fact_rows = build_fact_rows(api_row, reporter_m49)
+                try:
+                    api_data = fetch_bilateral(reporter_m49, partner_m49)
+                    api_calls += 1
+                except Exception as e:
+                    print(f"[error] {reporter_m49}→{partner_m49}: {e}")
+                    continue
 
-                for r in fact_rows:
-                    # Validate country codes exist
-                    if r["reporter_country_id"] not in lk["countries"]:
-                        print(f"[skip] reporter M49 not in dim_country: {r['reporter_country_id']}")
-                        skipped += 1
-                        continue
-                    if r["partner_country_id"] not in lk["countries"]:
-                        print(f"[skip] partner M49 not in dim_country: {r['partner_country_id']}")
-                        skipped += 1
-                        continue
+                rows = api_data.get("data", [])
+                if rows:
+                    print(f"[api] {REPORTERS[reporter_m49]:<12} → partner {partner_m49}: {len(rows)} rows")
 
-                    year = r.pop("date_year")
-                    if year not in lk["dates"]:
-                        print(f"[skip] year not in dim_date: {year}")
-                        skipped += 1
-                        continue
+                for api_row in rows:
+                    fact_rows = build_fact_rows(api_row, reporter_m49)
 
-                    source_id = refs[r.pop("source_key")]
+                    for r in fact_rows:
+                        if r["reporter_country_id"] not in lk["countries"]:
+                            skipped += 1
+                            continue
+                        if r["partner_country_id"] not in lk["countries"]:
+                            skipped += 1
+                            continue
 
-                    params = {
-                        "reporter_id":   lk["countries"][r["reporter_country_id"]],
-                        "partner_id":    lk["countries"][r["partner_country_id"]],
-                        "exporter_id":   lk["countries"][r["exporter_country_id"]],
-                        "importer_id":   lk["countries"][r["importer_country_id"]],
-                        "flow_code":     r["flow_code"],
-                        "hs_code":       r["hs_code"],
-                        "hs_revision":   r["hs_revision"],
-                        "product_id":    refs["product_id"],
-                        "date_id":       lk["dates"][year],
-                        "unit_id":       refs["unit_id"],
-                        "source_id":     source_id,
-                        "quantity":      r["trade_quantity"],
-                        "value":         r["trade_value_usd"],
-                        "valuation_basis": r["valuation_basis"],
-                        "is_reported":   r["is_reported"],
-                        "is_qty_est":    r["is_quantity_estimated"],
-                        "legacy_flag":   r["legacy_estimation_flag"],
-                        "notes":         r["notes"],
-                    }
+                        year = r.pop("date_year")
+                        if year not in lk["dates"]:
+                            skipped += 1
+                            continue
 
-                    # Skip rows with no value at all
-                    if params["quantity"] is None and params["value"] is None:
-                        skipped += 1
-                        continue
+                        source_id = refs[r.pop("source_key")]
 
-                    is_insert = conn.execute(UPSERT_SQL, params).scalar()
-                    if is_insert:
-                        inserted += 1
-                    else:
-                        updated += 1
+                        params = {
+                            "reporter_id":   lk["countries"][r["reporter_country_id"]],
+                            "partner_id":    lk["countries"][r["partner_country_id"]],
+                            "exporter_id":   lk["countries"][r["exporter_country_id"]],
+                            "importer_id":   lk["countries"][r["importer_country_id"]],
+                            "flow_code":     r["flow_code"],
+                            "hs_code":       r["hs_code"],
+                            "hs_revision":   r["hs_revision"],
+                            "product_id":    refs["product_id"],
+                            "date_id":       lk["dates"][year],
+                            "unit_id":       refs["unit_id"],
+                            "source_id":     source_id,
+                            "quantity":      r["trade_quantity"],
+                            "value":         r["trade_value_usd"],
+                            "valuation_basis": r["valuation_basis"],
+                            "is_reported":   r["is_reported"],
+                            "is_qty_est":    r["is_quantity_estimated"],
+                            "legacy_flag":   r["legacy_estimation_flag"],
+                            "notes":         r["notes"],
+                        }
 
-            # respectful delay between reporters
-            time.sleep(1)
+                        if params["quantity"] is None and params["value"] is None:
+                            skipped += 1
+                            continue
 
-    print(f"\n[done] Inserted: {inserted}  Updated: {updated}  Skipped: {skipped}")
+                        is_insert = conn.execute(UPSERT_SQL, params).scalar()
+                        if is_insert:
+                            inserted += 1
+                        else:
+                            updated += 1
+
+                time.sleep(0.5)   # polite delay between partner calls
+
+            time.sleep(1)   # longer delay between reporters
+
+    print(f"\n[api calls] {api_calls}")
+    print(f"[done] Inserted: {inserted}  Updated: {updated}  Skipped: {skipped}")
 
 
 if __name__ == "__main__":
