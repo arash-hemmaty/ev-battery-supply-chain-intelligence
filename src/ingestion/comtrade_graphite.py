@@ -35,14 +35,28 @@ load_dotenv(PROJECT_ROOT / ".env")
 API_BASE = "https://comtradeapi.un.org/tools/v1"
 API_KEY = os.getenv("COMTRADE_API_KEY")
 
-# Reporters: countries whose imports we want to analyze
+# Reporters: countries whose graphite imports we analyze.
+# Selection logic:
+#   1. Battery relevance (cell/pack production or significant EV market)
+#   2. Graphite trade relevance (imports in Comtrade)
+#   3. Comtrade coverage availability
+#   4. Data quality assessment
+# Rationale: target 13 reporters. No further expansion without a
+# specific analytical reason.
 REPORTERS = {
+    # Round 1 — core
     276: "Germany",
     392: "Japan",
     410: "South Korea",
     840: "United States",
     704: "Vietnam",
     356: "India",
+    # Round 2 — additional battery-relevant importers
+    158: "Taiwan",
+    616: "Poland",
+    348: "Hungary",
+    764: "Thailand",
+    724: "Spain",
 }
 
 # Partners: major natural graphite suppliers
