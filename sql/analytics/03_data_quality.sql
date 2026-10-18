@@ -161,3 +161,16 @@ SELECT 'F4: mirror pairing at 71% (144 rows unpaired)' AS finding;
 -- F5. No duplicates
 -- E1 returned 0 rows. Uniqueness enforced by constraint.
 SELECT 'F5: no duplicate observations' AS finding;
+SELECT
+    importer_name,
+    hs_code,
+    total_imports_t,
+    supplier_count,
+    hhi,
+    top1_share_pct,
+    top3_share_pct,
+    china_share_pct,
+    n1_coverage_pct
+FROM ev.v_country_dependency
+WHERE year = 2024
+ORDER BY importer_name, hs_code;

@@ -1,0 +1,92 @@
+{
+    "name": "EV Battery Supply Chain — Dark Theme",
+    "dataColors": [
+        "#9D4EDD",
+        "#7B2CBF",
+        "#5A189A",
+        "#3C096C",
+        "#240046",
+        "#FFB703",
+        "#FB8500",
+        "#023047",
+        "#8ECAE6",
+        "#219EBC"
+    ],
+    "background": "#0A1628",
+    "foreground": "#FFFFFF",
+    "tableAccent": "#9D4EDD",
+    "visualStyles": {
+        "*": {
+            "*": {
+                "background": [
+                    {
+                        "color": { "solid": { "color": "#0F1E3A" } },
+                        "transparency": 0
+                    }
+                ],
+                "border": [
+                    {
+                        "show": true,
+                        "color": { "solid": { "color": "#1E3A5F" } },
+                        "radius": 8
+                    }
+                ],
+                "visualHeader": [
+                    {
+                        "show": false
+                    }
+                ],
+                "title": [
+                    {
+                        "fontColor": { "solid": { "color": "#FFFFFF" } },
+                        "background": { "solid": { "color": "#0F1E3A" } },
+                        "fontSize": 12,
+                        "fontFamily": "Segoe UI Semibold"
+                    }
+                ]
+            }
+        },
+        "page": {
+            "*": {
+                "outspacePane": [
+                    {
+                        "backgroundColor": {
+                            "solid": { "color": "#0F1E3A" }
+                        },
+                        "foregroundColor": {
+                            "solid": { "color": "#FFFFFF" }
+                        },
+                        "transparency": 0
+                    }
+                ],
+                "filterCard": [
+                    {
+                        "backgroundColor": {
+                            "solid": { "color": "#152A4A" }
+                        },
+                        "foregroundColor": {
+                            "solid": { "color": "#FFFFFF" }
+                        }
+                    }
+                ]
+            }
+        }
+    },
+    "textClasses": {
+        "title": {
+            "fontFace": "Segoe UI Semibold",
+            "fontSize": 14,
+            "color": "#FFFFFF"
+        },
+        "header": {
+            "fontFace": "Segoe UI Semibold",
+            "fontSize": 12,
+            "color": "#FFFFFF"
+        },
+        "callout": {
+            "fontFace": "Segoe UI Semibold",
+            "fontSize": 36,
+            "color": "#FFFFFF"
+        }
+    }
+}
